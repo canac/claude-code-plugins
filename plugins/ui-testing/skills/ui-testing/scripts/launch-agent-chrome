@@ -1,0 +1,165 @@
+#!/usr/bin/env node
+// Usage: launch-agent-chrome [--proxy PORT] [chrome args...]
+// Without --proxy, starts the shared agent Chrome on port 9222.
+// With --proxy, starts a Chrome for this Claude Code session only that proxies through
+// 127.0.0.1:PORT. agent-chrome-mcp switches this session's playwright-cdp tools to it.
+
+import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+
+const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const SHARED_CDP_PORT = 9222;
+const sessionsDir = path.join(os.homedir(), ".chrome-agent-sessions");
+const claudePid = process.env.CLAUDE_PID;
+const stateFile = path.join(sessionsDir, `${claudePid}.json`);
+
+let proxyPort;
+const chromeArgs = [];
+const argv = process.argv.slice(2);
+for (let i = 0; i < argv.length; i++) {
+  if (argv[i] === "--proxy") {
+    proxyPort = argv[++i];
+  } else if (argv[i].startsWith("--proxy=")) {
+    proxyPort = argv[i].slice("--proxy=".length);
+  } else {
+    chromeArgs.push(argv[i]);
+  }
+}
+
+function fail(message) {
+  console.error(`launch-agent-chrome: ${message}`);
+  process.exit(1);
+}
+
+function isAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readState() {
+  try {
+    return JSON.parse(fs.readFileSync(stateFile, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+function forwardSignals(child) {
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    process.on(signal, () => child.kill(signal));
+  }
+}
+
+if (proxyPort === "") fail("--proxy needs a port");
+
+// Retire this session's previous proxied Chrome so the tools fall back to, or swap to, the new one.
+const oldState = claudePid && readState();
+if (oldState) {
+  try {
+    process.kill(oldState.chromePid);
+  } catch {}
+  while (isAlive(oldState.chromePid)) await sleep(100);
+  fs.rmSync(oldState.profile, { recursive: true, force: true });
+  fs.rmSync(stateFile, { force: true });
+}
+
+if (proxyPort === undefined) {
+  try {
+    await fetch(`http://127.0.0.1:${SHARED_CDP_PORT}/json/version`);
+    process.exit(0);
+  } catch {}
+  const child = spawn(
+    CHROME,
+    [
+      `--user-data-dir=${path.join(os.homedir(), ".chrome-agent")}`,
+      `--remote-debugging-port=${SHARED_CDP_PORT}`,
+      ...chromeArgs,
+    ],
+    { stdio: "inherit" },
+  );
+  forwardSignals(child);
+  child.on("exit", (code) => process.exit(code ?? 1));
+} else {
+  if (!claudePid) {
+    fail("--proxy must run from a Claude Code Bash tool (CLAUDE_PID is unset)");
+  }
+
+  // Chrome locks its profile, so run on an instant APFS clone of the shared one.
+  const profile = path.join(sessionsDir, claudePid);
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  const clone = spawnSync(
+    "cp",
+    ["-cR", path.join(os.homedir(), ".chrome-agent"), profile],
+    { stdio: "inherit" },
+  );
+  if (clone.status !== 0) fail("could not copy the shared profile");
+  for (const name of fs.readdirSync(profile)) {
+    if (name.startsWith("Singleton") || name === "DevToolsActivePort") {
+      fs.rmSync(path.join(profile, name), { force: true });
+    }
+  }
+
+  const chrome = spawn(
+    CHROME,
+    [
+      `--user-data-dir=${profile}`,
+      "--remote-debugging-port=0",
+      `--proxy-server=http://127.0.0.1:${proxyPort}`,
+      "--no-first-run",
+      "--no-default-browser-check",
+      ...chromeArgs,
+    ],
+    { stdio: "ignore" },
+  );
+
+  const chromeExited = new Promise((resolve) => chrome.on("exit", resolve));
+
+  // Waits for Chrome to exit first, since it keeps writing to the profile while shutting down.
+  async function cleanup(code) {
+    chrome.kill();
+    await chromeExited;
+    // Only clean up if a newer launch hasn't replaced this Chrome.
+    if (readState()?.chromePid === chrome.pid) {
+      fs.rmSync(profile, { recursive: true, force: true });
+      fs.rmSync(stateFile, { force: true });
+    }
+    process.exit(code);
+  }
+
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    process.on(signal, () => cleanup(1));
+  }
+
+  const portFile = path.join(profile, "DevToolsActivePort");
+  let cdpPort;
+  for (let i = 0; i < 100 && !cdpPort; i++) {
+    try {
+      cdpPort = Number(fs.readFileSync(portFile, "utf8").split("\n")[0]);
+    } catch {}
+    if (!cdpPort) await sleep(100);
+  }
+  if (!cdpPort) {
+    chrome.kill();
+    await chromeExited;
+    fs.rmSync(profile, { recursive: true, force: true });
+    fail("Chrome did not open a debugging port");
+  }
+
+  fs.writeFileSync(
+    stateFile,
+    JSON.stringify({ cdpPort, chromePid: chrome.pid, profile }),
+  );
+  console.log(
+    `Chrome for this session is up on CDP port ${cdpPort}, proxied through 127.0.0.1:${proxyPort}`,
+  );
+
+  await chromeExited;
+  await cleanup(0);
+}

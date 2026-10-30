@@ -1,0 +1,7 @@
+{
+  "name": "ui-testing",
+  "description": "Test web UIs in a dedicated Chrome over CDP, with per-session proxy support",
+  "author": {
+    "name": "Caleb Cox"
+  }
+}
