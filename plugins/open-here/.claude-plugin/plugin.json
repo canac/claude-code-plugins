@@ -1,0 +1,1 @@
+{ "name": "open-here", "description": "Band with buttons to open the session's directory in a cmux tab, VS Code or Zed", "types": "./types/index.d.ts" }
