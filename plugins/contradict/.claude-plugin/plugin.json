@@ -1,0 +1,7 @@
+{
+  "name": "contradict",
+  "description": "Attack a plan with parallel adversarial subagents",
+  "author": {
+    "name": "Caleb Cox"
+  }
+}
