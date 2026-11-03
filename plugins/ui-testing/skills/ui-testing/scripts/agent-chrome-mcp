@@ -77,6 +77,8 @@ server.listen(0, "127.0.0.1", () => {
     ],
     {
       stdio: "inherit",
+      // Keeps npx from enforcing the project's devEngines, e.g. a pnpm-only package.json.
+      cwd: os.homedir(),
       env: {
         PLAYWRIGHT_MCP_OUTPUT_DIR: path.join(os.tmpdir(), "playwright-mcp"),
         ...process.env,
