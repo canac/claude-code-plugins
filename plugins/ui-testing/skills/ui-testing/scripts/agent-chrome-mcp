@@ -1,59 +1,14 @@
 #!/usr/bin/env node
-// Runs the Playwright MCP against a per-session CDP forwarder, so `launch-agent-chrome --proxy`
-// can point this Claude Code session at its own Chrome without touching other sessions.
+// Runs the Playwright MCP against this session's CDP forwarder.
 // Usage: agent-chrome-mcp [playwright-mcp args...]
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { readState, startForwarder, stateFile } from "./cdp-forwarder.mjs";
 
-const SHARED_CDP_PORT = 9222;
-// Claude Code spawns this directly, so the parent pid matches $CLAUDE_PID in its Bash tool.
-const stateFile = path.join(
-  os.homedir(),
-  ".chrome-agent-sessions",
-  `${process.ppid}.json`,
-);
-
-function readState() {
-  try {
-    return JSON.parse(fs.readFileSync(stateFile, "utf8"));
-  } catch {
-    return {};
-  }
-}
-
-function targetPort() {
-  const { cdpPort, chromePid } = readState();
-  try {
-    process.kill(chromePid, 0);
-    return cdpPort;
-  } catch {
-    return SHARED_CDP_PORT;
-  }
-}
-
-const sockets = new Set();
-const server = net.createServer((client) => {
-  const upstream = net.connect(targetPort(), "127.0.0.1");
-  for (const socket of [client, upstream]) {
-    sockets.add(socket);
-    socket.on("close", () => sockets.delete(socket));
-    socket.on("error", () => {
-      client.destroy();
-      upstream.destroy();
-    });
-  }
-  client.pipe(upstream).pipe(client);
-});
-
-// Dropping the connection makes Playwright MCP reconnect, and pick up the new target, on its next tool call.
-fs.watchFile(stateFile, { interval: 500 }, () => {
-  for (const socket of sockets) socket.destroy();
-});
-
+// This server owns the session's Chrome, so it stops it when Claude Code exits.
 function cleanup() {
   const { chromePid, profile } = readState();
   if (chromePid) {
@@ -65,31 +20,29 @@ function cleanup() {
   fs.rmSync(stateFile, { force: true });
 }
 
-server.listen(0, "127.0.0.1", () => {
-  const endpoint = `http://127.0.0.1:${server.address().port}`;
-  const child = spawn(
-    "npx",
-    [
-      "--yes",
-      "@playwright/mcp@latest",
-      `--cdp-endpoint=${endpoint}`,
-      ...process.argv.slice(2),
-    ],
-    {
-      stdio: "inherit",
-      // Keeps npx from enforcing the project's devEngines, e.g. a pnpm-only package.json.
-      cwd: os.homedir(),
-      env: {
-        PLAYWRIGHT_MCP_OUTPUT_DIR: path.join(os.tmpdir(), "playwright-mcp"),
-        ...process.env,
-      },
+const { endpoint } = await startForwarder();
+const child = spawn(
+  "npx",
+  [
+    "--yes",
+    "@playwright/mcp@latest",
+    `--cdp-endpoint=${endpoint}`,
+    ...process.argv.slice(2),
+  ],
+  {
+    stdio: "inherit",
+    // Keeps npx from enforcing the project's devEngines, e.g. a pnpm-only package.json.
+    cwd: os.homedir(),
+    env: {
+      PLAYWRIGHT_MCP_OUTPUT_DIR: path.join(os.tmpdir(), "playwright-mcp"),
+      ...process.env,
     },
-  );
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-    process.on(signal, () => child.kill(signal));
-  }
-  child.on("exit", (code) => {
-    cleanup();
-    process.exit(code ?? 1);
-  });
+  },
+);
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(signal, () => child.kill(signal));
+}
+child.on("exit", (code) => {
+  cleanup();
+  process.exit(code ?? 1);
 });

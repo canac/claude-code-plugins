@@ -1,0 +1,23 @@
+#!/usr/bin/env node
+// Runs login-agent's MCP server against this session's CDP forwarder, so it fills in the same Chrome as the
+// playwright-cdp tools. agent-chrome-mcp owns the session's Chrome, so this never stops it.
+
+import { spawn } from "node:child_process";
+import { startForwarder } from "./cdp-forwarder.mjs";
+
+const { endpoint } = await startForwarder();
+const child = spawn("login-agent", ["mcp", `--cdp-endpoint=${endpoint}`], {
+  stdio: "inherit",
+});
+child.on("error", (error) => {
+  console.error(
+    error.code === "ENOENT"
+      ? "login-agent-mcp: login-agent is not installed; see its README"
+      : `login-agent-mcp: could not start login-agent: ${error.message}`,
+  );
+  process.exit(1);
+});
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(signal, () => child.kill(signal));
+}
+child.on("exit", (code) => process.exit(code ?? 1));

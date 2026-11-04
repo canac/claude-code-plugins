@@ -4,6 +4,10 @@
       "type": "stdio",
       "command": "${CLAUDE_PLUGIN_ROOT}/skills/ui-testing/scripts/agent-chrome-mcp",
       "args": ["--caps=devtools"]
+    },
+    "login-agent": {
+      "type": "stdio",
+      "command": "${CLAUDE_PLUGIN_ROOT}/skills/ui-testing/scripts/login-agent-mcp"
     }
   }
 }
