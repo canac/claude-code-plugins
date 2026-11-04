@@ -43,6 +43,16 @@ function isAlive(pid) {
   }
 }
 
+// Chrome offers "Restore pages?" after a kill it can't catch, like Claude Code's SIGKILL on task stop.
+function markCleanExit(profile) {
+  const prefsFile = path.join(profile, "Default", "Preferences");
+  try {
+    const prefs = JSON.parse(fs.readFileSync(prefsFile, "utf8"));
+    prefs.profile.exit_type = "Normal";
+    fs.writeFileSync(prefsFile, JSON.stringify(prefs));
+  } catch {}
+}
+
 function readState() {
   try {
     return JSON.parse(fs.readFileSync(stateFile, "utf8"));
@@ -75,10 +85,12 @@ if (proxyPort === undefined) {
     await fetch(`http://127.0.0.1:${SHARED_CDP_PORT}/json/version`);
     process.exit(0);
   } catch {}
+  const sharedProfile = path.join(os.homedir(), ".chrome-agent");
+  markCleanExit(sharedProfile);
   const child = spawn(
     CHROME,
     [
-      `--user-data-dir=${path.join(os.homedir(), ".chrome-agent")}`,
+      `--user-data-dir=${sharedProfile}`,
       `--remote-debugging-port=${SHARED_CDP_PORT}`,
       ...chromeArgs,
     ],
@@ -105,6 +117,7 @@ if (proxyPort === undefined) {
       fs.rmSync(path.join(profile, name), { force: true });
     }
   }
+  markCleanExit(profile);
 
   const chrome = spawn(
     CHROME,
