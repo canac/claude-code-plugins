@@ -67,6 +67,7 @@ function markCleanExit(profile) {
 function pickProfile(cloneDir) {
   const picked = pickProfileDir(cloneDir);
   markCleanExit(picked.profile);
+  console.error(`launch-agent-chrome: profile directory is ${picked.profile}`);
   return picked;
 }
 
@@ -87,9 +88,6 @@ function pickProfileDir(cloneDir) {
       fs.rmSync(path.join(cloneDir, name), { force: true });
     }
   }
-  console.error(
-    "launch-agent-chrome: another Chrome is using the shared profile, so this one runs on a copy",
-  );
   return { profile: cloneDir, cloned: true };
 }
 
