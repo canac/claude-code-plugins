@@ -166,7 +166,13 @@ if (proxyPort === undefined) {
     { stdio: "ignore" },
   );
 
-  const chromeExited = new Promise((resolve) => chrome.on("exit", resolve));
+  let exitCode;
+  const chromeExited = new Promise((resolve) =>
+    chrome.on("exit", (code, signal) => {
+      exitCode = code ?? signal;
+      resolve();
+    }),
+  );
 
   // Waits for Chrome to exit first, since it keeps writing to the profile while shutting down.
   async function cleanup(code) {
@@ -185,18 +191,24 @@ if (proxyPort === undefined) {
   }
 
   const portFile = path.join(profile, "DevToolsActivePort");
+  const portTimeoutMs = 60_000;
+  const deadline = Date.now() + portTimeoutMs;
   let cdpPort;
-  for (let i = 0; i < 100 && !cdpPort; i++) {
+  while (!cdpPort && exitCode === undefined && Date.now() < deadline) {
     try {
       cdpPort = Number(fs.readFileSync(portFile, "utf8").split("\n")[0]);
     } catch {}
     if (!cdpPort) await sleep(100);
   }
   if (!cdpPort) {
+    const reason =
+      exitCode === undefined
+        ? `within ${portTimeoutMs / 1000}s`
+        : `before exiting (${exitCode})`;
     chrome.kill();
     await chromeExited;
     removeClone();
-    fail("Chrome did not open a debugging port");
+    fail(`Chrome did not open a debugging port ${reason}`);
   }
 
   // `profile` is set only for a clone, since whoever reads the state deletes it.
