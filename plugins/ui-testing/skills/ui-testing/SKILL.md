@@ -5,7 +5,7 @@ description: Use when testing, debugging, or verifying a web UI in a real browse
 
 # UI testing
 
-The `playwright-cdp` MCP tools drive a dedicated Chrome over CDP. Run `${CLAUDE_SKILL_DIR}/scripts/launch-agent-chrome` in the background before using them. Other sessions may share that Chrome, so open your own tab with `browser_tabs` action `new` before navigating, and close it when done.
+The `playwright-cdp` MCP tools drive a dedicated Chrome over CDP, which starts on their first call. Other sessions may share that Chrome, so open your own tab with `browser_tabs` action `new` before navigating, and close it when done.
 
 ## Logging in
 
@@ -13,7 +13,7 @@ Log in with the `login-agent` tools if available instead of typing credentials. 
 
 ## Proxy
 
-To send this session's browser traffic through a proxy, run this in the background instead:
+To send this session's browser traffic through a proxy, run this in the background:
 
 ```sh
 ${CLAUDE_SKILL_DIR}/scripts/launch-agent-chrome --proxy <port>
